@@ -1,0 +1,7 @@
+error[E0599]: no method named `into_inner` found for struct `Provenanced<hearsay_core::Data, String>` in the current scope
+  --> tests/ui/data_has_no_into_inner.rs:17:32
+   |
+17 |     let _leaked: String = data.into_inner();
+   |                                ^^^^^^^^^^ method not found in `Provenanced<hearsay_core::Data, String>`
+   |
+   = note: the method was found for `Provenanced<hearsay_core::Instruction, T>`

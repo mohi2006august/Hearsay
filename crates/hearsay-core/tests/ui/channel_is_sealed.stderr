@@ -1,0 +1,27 @@
+error[E0277]: the trait bound `SemiTrusted: provenance::sealed::Sealed` is not satisfied
+  --> tests/ui/channel_is_sealed.rs:12:18
+   |
+12 | impl Channel for SemiTrusted {
+   |                  ^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `provenance::sealed::Sealed` is not implemented for `SemiTrusted`
+  --> tests/ui/channel_is_sealed.rs:10:1
+   |
+10 | struct SemiTrusted;
+   | ^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `provenance::sealed::Sealed`
+  --> src/provenance.rs
+   |
+   | impl sealed::Sealed for Instruction {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `hearsay_core::Instruction`
+   | impl sealed::Sealed for Data {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `hearsay_core::Data`
+note: required by a bound in `Channel`
+  --> src/provenance.rs
+   |
+   | pub trait Channel: sealed::Sealed + Copy + fmt::Debug + 'static {
+   |                    ^^^^^^^^^^^^^^ required by this bound in `Channel`
+   = note: `Channel` is a "sealed trait", because to implement it you also need to implement `hearsay_core::provenance::sealed::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+   = help: the following types implement the trait:
+             hearsay_core::Instruction
+             hearsay_core::Data

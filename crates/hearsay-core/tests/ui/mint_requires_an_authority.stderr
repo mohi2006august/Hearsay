@@ -1,0 +1,18 @@
+error[E0277]: the trait bound `NotAnAuthority: ClearanceAuthority` is not satisfied
+  --> tests/ui/mint_requires_an_authority.rs:15:9
+   |
+14 |     let _witness = Declassification::mint(
+   |                    ---------------------- required by a bound introduced by this call
+15 |         &NotAnAuthority,
+   |         ^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `ClearanceAuthority` is not implemented for `NotAnAuthority`
+  --> tests/ui/mint_requires_an_authority.rs:11:1
+   |
+11 | struct NotAnAuthority;
+   | ^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `Declassification::mint`
+  --> src/clearance.rs
+   |
+   |     pub fn mint<A: ClearanceAuthority + ?Sized>(
+   |                    ^^^^^^^^^^^^^^^^^^ required by this bound in `Declassification::mint`

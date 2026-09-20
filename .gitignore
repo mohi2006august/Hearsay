@@ -1,0 +1,20 @@
+# Rust build output. Large and churning — keep it off OneDrive sync if you can
+# (see README: set CARGO_TARGET_DIR outside the synced folder).
+/target/
+**/*.rs.bk
+
+# Model artefacts are content-addressed and fetched, never committed
+/models/*.onnx
+
+# Evaluation output is committed selectively; raw run dirs are not
+/results/**/raw/
+
+# Adversarial corpus. Held privately per prd.md §9 — never commit until the
+# department signs off on release.
+/corpus/
+
+# Decision log and its content-addressed image store
+/var/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

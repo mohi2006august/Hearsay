@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/data_is_not_an_instruction.rs:21:27
+   |
+21 |     build_upstream_prompt(data);
+   |     --------------------- ^^^^ expected `Provenanced<Instruction, String>`, found `Provenanced<Data, String>`
+   |     |
+   |     arguments to this function are incorrect
+   |
+   = note: expected struct `Provenanced<hearsay_core::Instruction, String>`
+              found struct `Provenanced<hearsay_core::Data, String>`
+note: function defined here
+  --> tests/ui/data_is_not_an_instruction.rs:11:4
+   |
+11 | fn build_upstream_prompt(_prompt: Provenanced<Instruction, String>) {}
+   |    ^^^^^^^^^^^^^^^^^^^^^ -----------------------------------------

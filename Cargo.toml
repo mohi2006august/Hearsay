@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hearsay-core",
+    "crates/hearsay-policy",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://example.invalid/hearsay"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Dev
+proptest = "1"
+trybuild = "1"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+# `unsafe_code` is set per-crate, not here. Every crate forbids it except the
+# two that define and implement the clearance authority escape hatch
+# (hearsay-core, hearsay-policy), which deny it with a single documented allow.
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "unwind"  # the proxy catches unwinds at the handler boundary; see design.md §10

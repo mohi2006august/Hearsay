@@ -1,0 +1,19 @@
+[package]
+name = "hearsay-policy"
+description = "Deterministic policy engine. Pure, total, no I/O, no model calls."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+hearsay-core = { path = "../hearsay-core" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+serde_json = "1"
+
+[lints]
+workspace = true
