@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- A redaction bar over a line of text: the system's defining act. -->
+  <rect width="32" height="32" rx="6" fill="#14595b"/>
+  <rect x="7" y="9"  width="18" height="2.5" rx="1" fill="#dce9e7" opacity="0.55"/>
+  <rect x="7" y="14.5" width="18" height="3.5" rx="1" fill="#0b2b2c"/>
+  <rect x="7" y="21" width="12" height="2.5" rx="1" fill="#dce9e7" opacity="0.55"/>
+</svg>

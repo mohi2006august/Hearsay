@@ -49,14 +49,17 @@ sites. The precise argument is in
 
 ## Status
 
-**Early. Weeks 0–1 of 16.** The provenance boundary and the policy engine
-exist and are tested — 51 tests passing, clippy clean. The pipeline around
-them does not exist yet.
+**Early. Weeks 0–1 of 16.** The provenance boundary, the policy engine, an
+HTTP surface and a dashboard exist and are tested — 57 tests passing, clippy
+clean, frontend typecheck clean. The extraction and classification stages do
+not exist yet, so scores are supplied by the caller rather than measured.
 
 | Crate | State |
 | --- | --- |
 | `hearsay-core` | Domain types, provenance boundary, clearance witness |
 | `hearsay-policy` | Deterministic engine, 7 rules, ruleset validation |
+| `hearsay-api` | HTTP surface over the engine and an in-memory decision log |
+| `web/` | Astro dashboard — decision feed, rule table, live evaluator |
 | `hearsay-ocr`, `hearsay-normalize`, `hearsay-classify` | Not started |
 | `hearsay-redact`, `hearsay-store`, `hearsay-proxy` | Not started |
 | `hearsay-corpus`, `hearsay-eval` | Not started |
@@ -82,6 +85,17 @@ parallelism exhausts system commit and rustc dies with errors that look like
 toolchain corruption. See [`docs/CLAUDE.md`](docs/CLAUDE.md) for the full
 diagnosis.
 
+### Running the dashboard
+
+```bash
+cargo run -p hearsay-api -j 1     # terminal 1 — http://127.0.0.1:8787
+cd web && npm install && npm run dev   # terminal 2 — http://localhost:4321
+```
+
+The dashboard is a static Astro bundle talking to the Rust service. Details,
+including the OneDrive `node_modules` caveat, are in
+[`web/README.md`](web/README.md).
+
 If your checkout is inside a synced folder (OneDrive, Dropbox), point the
 build output elsewhere first — a Rust `target/` directory is tens of thousands
 of files:
@@ -96,6 +110,8 @@ setx CARGO_TARGET_DIR "$env:LOCALAPPDATA\cargo-target\hearsay"
 crates/
   hearsay-core/      domain types + the provenance boundary. no I/O, no async
   hearsay-policy/    deterministic policy engine
+  hearsay-api/       HTTP surface: ruleset, decisions, evaluate, metrics
+web/                 Astro dashboard (see web/README.md)
 docs/
   brain.md              working context and decision log — read first
   prd.md                problem, threat model, requirements, evaluation plan

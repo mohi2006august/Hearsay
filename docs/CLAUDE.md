@@ -28,7 +28,7 @@ order this work follows.
 
 ## Status — as of 2026-09-20
 
-**Green.** Rust 1.98.1 MSVC installed; `cargo test --workspace` passes 51 tests,
+**Green.** Rust 1.98.1 MSVC installed; `cargo test --workspace` passes 57 tests,
 `cargo clippy --workspace --all-targets` is warning-free, `cargo fmt --check`
 is clean.
 
@@ -39,6 +39,10 @@ is clean.
 | `hearsay-core` property (proptest) | 5 |
 | `hearsay-policy` unit | 6 |
 | `hearsay-policy` rules | 19 |
+| `hearsay-api` normalise | 6 |
+
+The frontend typechecks clean (`astro check`: 0 errors, 0 warnings) and builds
+to ~90 KB total.
 
 The `.stderr` expectations in `crates/hearsay-core/tests/ui/` are generated and
 committed. They now verify rather than regenerate — a change in what the
@@ -48,7 +52,7 @@ compiler refuses will fail the build.
 
 ```
 Cargo.toml              workspace, pinned deps, shared lints
-rust-toolchain.toml     pinned 1.85.0
+rust-toolchain.toml     pinned 1.98.1
 crates/hearsay-core/       domain types + the provenance boundary
   src/provenance.rs       Provenanced<C, T>, Channel (sealed), Origin
   src/clearance.rs        ClearanceAuthority (unsafe trait), Declassification
@@ -63,13 +67,36 @@ crates/hearsay-policy/     deterministic engine
   src/ruleset.rs          thresholds + validation
   src/engine.rs           the 7 rules, aggregation, clearance minting
   tests/rules.rs          one test per rule + aggregation + degrade paths
+crates/hearsay-api/     HTTP surface (NOT hearsay-proxy)
+  src/record.rs           wire types, mirroring design.md §7
+  src/pipeline.rs         normalise -> policy; where OCR/classify slot in
+  src/normalize.rs        PLACEHOLDER for hearsay-normalize, see below
+  src/state.rs            in-memory decision ring, 500 entries, not durable
+  src/routes.rs           ruleset, decisions, stats, evaluate, metrics
+  src/seed.rs             boot fixtures, real engine output, tagged `seed`
+web/                    Astro dashboard, static output, no UI framework
+  src/lib/types.ts        hand-maintained mirror of record.rs — drifts silently
+  src/lib/api.ts          typed client, timeouts, polling with backoff
+  src/lib/dom.ts          node construction, never innerHTML
+  src/pages/              index (summary), decisions (browser), policy (evaluator)
 ```
 
 ### Not built
 
-`hearsay-ocr`, `hearsay-normalize`, `hearsay-classify`, `hearsay-redact`, `hearsay-store`,
-`hearsay-proxy`, `hearsay-corpus`, `hearsay-eval`, `xtask`. The workspace `members` list
-only names the two crates that exist — add each one as it lands.
+`hearsay-ocr`, `hearsay-normalize`, `hearsay-classify`, `hearsay-redact`,
+`hearsay-store`, `hearsay-proxy`, `hearsay-corpus`, `hearsay-eval`, `xtask`.
+The workspace `members` list names only the three crates that exist — add each
+one as it lands.
+
+**Two placeholders are standing in, and both must be replaced before any
+number is reported:**
+
+- `hearsay-api/src/normalize.rs` strips zero-width and bidi characters and
+  collapses whitespace. It does **not** do NFKC or confusable folding, so
+  homoglyph attacks walk straight through. There is a test asserting that
+  failure so it stays visible.
+- Scores are supplied by the caller. Nothing classifies anything yet, so no
+  ASR figure exists and none can.
 
 ## Pick up here
 
@@ -83,22 +110,54 @@ scope sign-off has landed (`prd.md` §9, required before week 3).
 
 ## Build environment — read before your first build
 
-**Always pass `-j 1`.** This machine has 15.6 GB RAM and **no pagefile
-configured**. Cargo's default parallelism exhausts system commit and rustc
-dies with `STATUS_STACK_BUFFER_OVERRUN` (0xc0000409), `error 1453`
-(insufficient system resources), or an ICE in `DroplessArena::grow`. These
-look like toolchain corruption and are not — a trivial `rustc` compile
-succeeds throughout. `-j 2` still fails on the syn-heavy proc-macro crates;
-`-j 1` completes the whole workspace in ~22 s.
+### REBOOT PENDING
 
-The durable fix is to enable a system-managed pagefile (needs admin and a
-reboot), after which the `-j 1` restriction can be dropped. Until then:
+A system-managed pagefile was enabled on 2026-09-20
+(`AutomaticManagedPagefile = True`), but **Windows only creates it on
+restart**. Until this machine reboots the commit limit is still 15.64 GB with
+roughly 0.8 GB free, and the constraint below still applies. After the reboot,
+confirm with:
+
+```powershell
+Get-CimInstance Win32_PageFileUsage | Select-Object Name, AllocatedBaseSize
+```
+
+then run `cargo test --workspace -j 1` and expect **57 passing**. The
+`hearsay-core` compile-fail suite is the one thing that has not been run since
+the workspace gained `hearsay-api` — it spawns a nested cargo build and needs
+more commit headroom than currently exists. Its `.stderr` files were generated
+and verified earlier in the session against identical `hearsay-core` sources,
+so it is expected to pass, but it is unconfirmed.
+
+### Why -j 1
+
+This machine had **no pagefile**, so the commit limit equalled physical RAM
+(15.64 GB) with nothing backing it, and ~14.8 GB was already committed by WSL,
+Defender, VS Code and OneDrive. Builds hit the ceiling and fail with errors
+that impersonate toolchain corruption:
+
+| Symptom | Actually |
+| --- | --- |
+| `link.exe failed: exit code 0xc000012d` | `STATUS_COMMIT_LIMIT` — the paging file is too small |
+| `exit code 0xc0000409` | `STATUS_STACK_BUFFER_OVERRUN` in rustc |
+| `error 1453` | `ERROR_NO_SYSTEM_RESOURCES` |
+| ICE in `DroplessArena::grow` | rustc's arena allocator failing |
+| ``cannot find value `None` in this scope`` | the sysroot failed to map |
+| `#[panic_handler] function required` | same |
+
+None of these mean the toolchain is broken — a trivial `rustc` compile
+succeeds throughout, which is the check that rules it out. Do not `cargo
+clean` while diagnosing one of these: a full rebuild needs more commit than an
+incremental one, and it makes the situation worse. Build in stages
+(`-p hearsay-core`, then `-p hearsay-policy`, then `-p hearsay-api`) if a
+whole-workspace build will not fit.
 
 ```powershell
 $env:CARGO_BUILD_JOBS = "1"
 ```
 
-Closing Ollama frees ~630 MB if a build still struggles.
+Closing Ollama frees ~630 MB, and `wsl --shutdown` another ~840 MB, if a build
+still struggles before the reboot.
 
 **Toolchain is 1.98.1**, pinned in `rust-toolchain.toml`. The original 1.85
 pin was too old — `trybuild` requires 1.88+.
@@ -108,10 +167,14 @@ pin was too old — `trybuild` requires 1.88+.
 ## Commands
 
 ```bash
-cargo test --workspace -j 1                    # 51 tests
+cargo test --workspace -j 1                    # 57 tests
 cargo clippy --workspace --all-targets -j 1
 cargo fmt --all
 cargo test -p hearsay-policy --test rules -j 1    # the demo's script
+
+cargo run -p hearsay-api -j 1                  # :8787
+cd web && npm run dev                          # :4321, proxies /api to 8787
+cd web && npm run build                        # astro check && astro build
 ```
 
 Regenerate the compile-fail expectations only after a rustc upgrade changes
@@ -130,6 +193,14 @@ but that does not stop OneDrive. Before the first build:
 ```powershell
 setx CARGO_TARGET_DIR "$env:LOCALAPPDATA\cargo-target\hearsay"
 ```
+
+The same applies to `web/node_modules`, and worse: OneDrive's filter corrupts
+npm's tar extraction outright. The symptom is `TAR_ENTRY_ERROR ... write`
+during install, then `SyntaxError: Invalid or unexpected token` from Node
+because files land with NUL bytes in them. `web/node_modules` is already a
+junction to `%LOCALAPPDATA%\hearsay-web
+ode_modules`; keep it that way, and
+recreate the junction rather than letting npm write into the synced folder.
 
 ## Code conventions
 

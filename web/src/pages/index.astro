@@ -1,0 +1,429 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Overview"
+  description="Live decision summary for the Hearsay provenance proxy."
+>
+  <div class="stack">
+    <section>
+      <p class="eyebrow">Decision log</p>
+      <h1>What the proxy did, and why</h1>
+      <p class="lede">
+        Every request that reaches the policy engine leaves a record: the regions it
+        carried, the score each one got, the rule that fired, and what happened to the
+        pixels. Nothing here is inferred — it is the log.
+      </p>
+    </section>
+
+    <section aria-labelledby="summary-head">
+      <div class="section-head">
+        <h2 id="summary-head">Summary</h2>
+        <span class="dim mono" id="uptime" style="font-size:.72rem"></span>
+      </div>
+      <div class="tiles" id="tiles">
+        <div class="tile skeleton" style="height:5.4rem"></div>
+        <div class="tile skeleton" style="height:5.4rem"></div>
+        <div class="tile skeleton" style="height:5.4rem"></div>
+        <div class="tile skeleton" style="height:5.4rem"></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="latency-head">
+      <div class="section-head">
+        <h2 id="latency-head">Latency against budget</h2>
+        <span class="dim" style="font-size:.78rem">
+          NFR: under 400 ms at p95 for one 1080p image
+        </span>
+      </div>
+      <div class="panel" style="padding:1rem">
+        <div id="latency"><div class="skeleton" style="height:3.4rem"></div></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="rules-head">
+      <div class="section-head">
+        <h2 id="rules-head">Which rules are firing</h2>
+        <a href="/policy" style="font-size:.82rem">See the rule table →</a>
+      </div>
+      <div class="panel" style="padding:1rem">
+        <div id="ruledist"><div class="skeleton" style="height:9rem"></div></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="recent-head">
+      <div class="section-head">
+        <h2 id="recent-head">Recent decisions</h2>
+        <a href="/decisions" style="font-size:.82rem">Browse all →</a>
+      </div>
+      <div class="panel">
+        <div id="recent"><div class="empty">Loading…</div></div>
+      </div>
+    </section>
+  </div>
+</Base>
+
+<script>
+  import { getStats, getDecisions, poll, ApiError } from '../lib/api';
+  import { el, clear, chip, sourceChip, need, errorNotice } from '../lib/dom';
+  import { relativeTime, duration, truncate } from '../lib/format';
+  import { outcomeAction, outcomeLabel, type Stats, type DecisionRecord } from '../lib/types';
+
+  const tiles = need('tiles');
+  const latency = need('latency');
+  const ruledist = need('ruledist');
+  const recent = need('recent');
+  const uptime = need('uptime');
+
+  function tile(label: string, value: string, note: string, accent = false): HTMLElement {
+    return el(
+      'div',
+      { class: `tile${accent ? ' tile--accent' : ''}` },
+      el('div', { class: 'tile-label' }, label),
+      el('div', { class: 'tile-value num' }, value),
+      el('div', { class: 'tile-note' }, note),
+    );
+  }
+
+  function renderTiles(s: Stats): void {
+    clear(tiles);
+    const intervened = s.allow_redacted + s.block;
+    tiles.append(
+      tile('Decisions', String(s.total), `${s.regions_total} regions inspected`),
+      tile(
+        'Intervened',
+        String(intervened),
+        s.total > 0 ? `${Math.round((intervened / s.total) * 100)}% of requests` : 'no traffic yet',
+        intervened > 0,
+      ),
+      tile('Regions redacted', String(s.regions_redacted), `${s.regions_flagged} flagged, not redacted`),
+      tile('Blocked', String(s.block), 'redaction was not possible'),
+    );
+    uptime.textContent = `api up ${duration(s.uptime_ms)}`;
+  }
+
+  function renderLatency(s: Stats): void {
+    clear(latency);
+    const { p50, p95, max, budget } = s.latency;
+    const scale = Math.max(budget, max) * 1.05;
+    const pct = (v: number) => `${Math.min((v / scale) * 100, 100)}%`;
+
+    const track = el(
+      'div',
+      { class: 'lat-track' },
+      el('div', { class: 'lat-fill', style: `width:${pct(p95)}` }),
+      el('div', {
+        class: `lat-budget${p95 > budget ? ' lat-budget--breached' : ''}`,
+        style: `left:${pct(budget)}`,
+        title: `budget ${budget} ms`,
+      }),
+    );
+
+    const legend = el(
+      'div',
+      { class: 'lat-legend' },
+      el('span', {}, el('span', { class: 'dim' }, 'p50 '), el('span', { class: 'num' }, `${p50} ms`)),
+      el('span', {}, el('span', { class: 'dim' }, 'p95 '), el('span', { class: 'num' }, `${p95} ms`)),
+      el('span', {}, el('span', { class: 'dim' }, 'max '), el('span', { class: 'num' }, `${max} ms`)),
+      el('span', { class: 'dim' }, `budget ${budget} ms`),
+    );
+
+    latency.append(track, legend);
+
+    if (p95 > budget) {
+      latency.append(
+        el(
+          'p',
+          { class: 'dim', style: 'font-size:.8rem;margin:.7rem 0 0' },
+          `p95 is over budget. In the seeded set that is the failed-extraction case, where OCR spent ${max} ms before giving up — a real scenario the budget has to survive.`,
+        ),
+      );
+    }
+  }
+
+  function renderRuleDist(s: Stats): void {
+    clear(ruledist);
+    const peak = Math.max(1, ...s.by_rule.map((r) => r.count));
+    const list = el('div', { class: 'bars' });
+    for (const r of s.by_rule) {
+      list.append(
+        el(
+          'div',
+          { class: 'bar-row' },
+          el('span', { class: 'bar-label mono' }, r.rule_id),
+          el(
+            'span',
+            { class: 'bar-track' },
+            el('span', {
+              class: `bar-fill${r.count === 0 ? ' bar-fill--zero' : ''}`,
+              style: `width:${(r.count / peak) * 100}%`,
+            }),
+          ),
+          el('span', { class: 'bar-value num' }, String(r.count)),
+        ),
+      );
+    }
+    ruledist.append(list);
+    ruledist.append(
+      el(
+        'p',
+        { class: 'dim', style: 'font-size:.78rem;margin:.85rem 0 0' },
+        'Counted per region, not per request, so one request with four regions contributes four.',
+      ),
+    );
+  }
+
+  function renderRecent(items: DecisionRecord[]): void {
+    clear(recent);
+    if (items.length === 0) {
+      recent.append(
+        el(
+          'div',
+          { class: 'empty' },
+          'No decisions yet. Submit one from the ',
+          el('a', { href: '/policy' }, 'Policy'),
+          ' page.',
+        ),
+      );
+      return;
+    }
+
+    const list = el('ul', { class: 'feed' });
+    for (const d of items.slice(0, 8)) {
+      const action = outcomeAction(d.outcome);
+      const worst = d.regions.find((r) => r.action === action) ?? d.regions[0];
+      list.append(
+        el(
+          'li',
+          {},
+          el(
+            'a',
+            { class: 'feed-row', href: `/decisions#${d.decision_id}` },
+            el(
+              'span',
+              { class: 'feed-top' },
+              chip(action, outcomeLabel(d.outcome)),
+              el('span', { class: 'feed-rule mono' }, d.rule_id),
+              sourceChip(d.source),
+              el('span', { class: 'feed-time dim' }, relativeTime(d.ts_ms)),
+            ),
+            el('span', { class: 'feed-text' }, truncate(worst?.raw ?? '(no regions)', 110)),
+          ),
+        ),
+      );
+    }
+    recent.append(list);
+  }
+
+  function showError(e: unknown): void {
+    const err = e instanceof ApiError ? e : new ApiError('network', String(e));
+    for (const host of [tiles, latency, ruledist, recent]) {
+      clear(host);
+      host.append(errorNotice(err.userMessage, err.detail || undefined));
+    }
+  }
+
+  let failed = false;
+
+  poll(
+    async () => {
+      const [stats, decisions] = await Promise.all([getStats(), getDecisions({ limit: 8 })]);
+      failed = false;
+      renderTiles(stats);
+      renderLatency(stats);
+      renderRuleDist(stats);
+      renderRecent(decisions);
+    },
+    5000,
+    (e) => {
+      // Only blank the page on the first failure; after that leave the error
+      // in place rather than repainting it every backoff tick.
+      if (!failed) {
+        failed = true;
+        showError(e);
+      }
+    },
+  );
+</script>
+
+<style>
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.75rem;
+  }
+
+  .tile {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 0.85rem 0.95rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .tile--accent {
+    border-left: 2px solid var(--redact);
+  }
+
+  .tile-label {
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--muted);
+  }
+
+  .tile-value {
+    font-size: 1.9rem;
+    line-height: 1.1;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+
+  .tile-note {
+    font-size: 0.76rem;
+    color: var(--muted);
+  }
+
+  /* latency */
+  .lat-track {
+    position: relative;
+    height: 2rem;
+    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  .lat-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  }
+
+  .lat-budget {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    background: var(--ink);
+  }
+
+  .lat-budget--breached {
+    background: var(--redact);
+  }
+
+  .lat-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.1rem;
+    margin-top: 0.55rem;
+    font-size: 0.8rem;
+  }
+
+  /* rule distribution */
+  .bars {
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .bar-row {
+    display: grid;
+    grid-template-columns: minmax(8rem, 13rem) 1fr 2.5rem;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .bar-label {
+    font-size: 0.7rem;
+    color: var(--ink-soft);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .bar-track {
+    height: 0.75rem;
+    background: var(--surface-2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    min-width: 2px;
+  }
+
+  .bar-fill--zero {
+    background: transparent;
+  }
+
+  .bar-value {
+    font-size: 0.78rem;
+    text-align: right;
+    color: var(--ink-soft);
+  }
+
+  /* feed */
+  .feed {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .feed li + li {
+    border-top: 1px solid var(--rule-soft);
+  }
+
+  .feed-row {
+    display: grid;
+    gap: 0.3rem;
+    padding: 0.7rem 0.9rem;
+    text-decoration: none;
+    color: inherit;
+  }
+
+  .feed-row:hover {
+    background: var(--surface-2);
+  }
+
+  .feed-top {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .feed-rule {
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+
+  .feed-time {
+    margin-left: auto;
+    font-size: 0.74rem;
+    white-space: nowrap;
+  }
+
+  .feed-text {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 34rem) {
+    .bar-row {
+      grid-template-columns: 1fr 2.5rem;
+    }
+    .bar-label {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

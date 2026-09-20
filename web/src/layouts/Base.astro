@@ -1,0 +1,329 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description } = Astro.props;
+const path = Astro.url.pathname.replace(/\/$/, '') || '/';
+
+const nav = [
+  { href: '/', label: 'Overview' },
+  { href: '/decisions', label: 'Decisions' },
+  { href: '/policy', label: 'Policy' },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{title} · Hearsay</title>
+    {description && <meta name="description" content={description} />}
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="topbar">
+      <div class="topbar-in">
+        <a class="wordmark" href="/">
+          Hearsay
+          <span class="wordmark-sub">provenance proxy</span>
+        </a>
+
+        <nav aria-label="Sections">
+          <ul>
+            {
+              nav.map((item) => (
+                <li>
+                  <a href={item.href} aria-current={path === item.href ? 'page' : undefined}>
+                    {item.label}
+                  </a>
+                </li>
+              ))
+            }
+          </ul>
+        </nav>
+
+        <div class="topbar-right">
+          <!-- Connection state is not decoration: every number on these pages
+               comes from hearsay-api, so whether it is reachable is the first
+               thing a reader needs to know. -->
+          <span class="conn" id="conn" data-state="checking">
+            <span class="conn-dot" aria-hidden="true"></span>
+            <span class="conn-text">checking…</span>
+          </span>
+          <button
+            type="button"
+            class="theme-toggle"
+            id="theme-toggle"
+            aria-label="Switch colour theme"
+            title="Switch colour theme"
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M8 1.5a6.5 6.5 0 1 0 6.5 6.5A5 5 0 0 1 8 1.5Z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linejoin="round"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main" class="page">
+      <slot />
+    </main>
+
+    <footer class="sitefoot">
+      <div class="sitefoot-in">
+        <p>
+          Research prototype, weeks 0–1 of 16. Thresholds are uncalibrated placeholders
+          and no figure on these pages is a reportable result.
+        </p>
+        <p class="dim">
+          Threat model: a third party injecting content the user did not author. The
+          adversarial corpus is held privately per <code>prd.md</code> §9.
+        </p>
+      </div>
+    </footer>
+
+    <script>
+      // Theme: respect the OS until the reader overrides it, then remember.
+      const KEY = 'hearsay-theme';
+      const root = document.documentElement;
+
+      try {
+        const saved = localStorage.getItem(KEY);
+        if (saved === 'dark' || saved === 'light') root.dataset.theme = saved;
+      } catch {
+        /* private mode, blocked storage — the OS preference still applies */
+      }
+
+      document.getElementById('theme-toggle')?.addEventListener('click', () => {
+        const isDark = root.dataset.theme
+          ? root.dataset.theme === 'dark'
+          : window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const next = isDark ? 'light' : 'dark';
+        root.dataset.theme = next;
+        try {
+          localStorage.setItem(KEY, next);
+        } catch {
+          /* not fatal: the choice just will not persist */
+        }
+      });
+    </script>
+
+    <script>
+      import { getStats, ApiError } from '../lib/api';
+
+      // A single shared health check drives the indicator on every page.
+      const el = document.getElementById('conn');
+      const text = el?.querySelector('.conn-text');
+
+      async function check(): Promise<void> {
+        if (!el || !text) return;
+        try {
+          const stats = await getStats();
+          el.dataset.state = 'up';
+          text.textContent = `connected · ${stats.total} decisions`;
+        } catch (e) {
+          el.dataset.state = 'down';
+          text.textContent =
+            e instanceof ApiError && e.kind === 'timeout' ? 'api timeout' : 'api unreachable';
+        }
+      }
+
+      void check();
+      setInterval(() => void check(), 10_000);
+    </script>
+
+    <style>
+      .skip {
+        position: absolute;
+        left: -9999px;
+        top: 0;
+        background: var(--surface);
+        color: var(--ink);
+        padding: 0.6rem 1rem;
+        z-index: 100;
+        border: 1px solid var(--accent);
+        border-radius: 0 0 var(--radius) 0;
+      }
+      .skip:focus {
+        left: 0;
+      }
+
+      .topbar {
+        position: sticky;
+        top: env(safe-area-inset-top, 0px);
+        z-index: 20;
+        background: color-mix(in srgb, var(--paper) 90%, transparent);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--rule);
+      }
+
+      .topbar-in {
+        max-width: var(--page);
+        margin: 0 auto;
+        padding: 0.55rem 1.25rem;
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+        flex-wrap: wrap;
+      }
+
+      .wordmark {
+        font-family: var(--font-display);
+        font-size: 1.05rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        color: var(--ink);
+        text-decoration: none;
+        display: flex;
+        align-items: baseline;
+        gap: 0.5rem;
+      }
+
+      .wordmark-sub {
+        font-family: var(--font-mono);
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.11em;
+        color: var(--muted);
+        font-weight: 400;
+      }
+
+      nav ul {
+        display: flex;
+        gap: 0.25rem;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      nav a {
+        display: block;
+        padding: 0.3rem 0.6rem;
+        border-radius: var(--radius-sm);
+        font-size: 0.85rem;
+        color: var(--ink-soft);
+        text-decoration: none;
+      }
+
+      nav a:hover {
+        background: var(--surface-2);
+        color: var(--ink);
+      }
+
+      nav a[aria-current='page'] {
+        color: var(--accent);
+        background: var(--accent-wash);
+        font-weight: 500;
+      }
+
+      .topbar-right {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      .conn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .conn-dot {
+        width: 0.45rem;
+        height: 0.45rem;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: none;
+      }
+
+      .conn[data-state='up'] .conn-dot {
+        background: var(--allow);
+      }
+      .conn[data-state='up'] {
+        color: var(--ink-soft);
+      }
+      .conn[data-state='down'] .conn-dot {
+        background: var(--redact);
+      }
+      .conn[data-state='down'] {
+        color: var(--redact);
+      }
+
+      .theme-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.85rem;
+        height: 1.85rem;
+        padding: 0;
+        border: 1px solid var(--rule);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+        color: var(--ink-soft);
+        cursor: pointer;
+      }
+
+      .theme-toggle:hover {
+        background: var(--surface-2);
+        color: var(--ink);
+      }
+
+      .sitefoot {
+        border-top: 1px solid var(--rule);
+        margin-top: 2rem;
+      }
+
+      .sitefoot-in {
+        max-width: var(--page);
+        margin: 0 auto;
+        padding: 1.5rem 1.25rem calc(2rem + env(safe-area-inset-bottom, 0px));
+        font-size: 0.8rem;
+        color: var(--ink-soft);
+        display: grid;
+        gap: 0.4rem;
+      }
+
+      .sitefoot p {
+        margin: 0;
+        max-width: 68ch;
+      }
+
+      @media (max-width: 40rem) {
+        .topbar-in {
+          gap: 0.75rem;
+        }
+        .wordmark-sub {
+          display: none;
+        }
+        .topbar-right {
+          width: 100%;
+          margin-left: 0;
+          justify-content: space-between;
+        }
+      }
+    </style>
+  </body>
+</html>

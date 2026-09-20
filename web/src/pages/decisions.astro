@@ -1,0 +1,535 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Decisions"
+  description="Browse and replay individual policy decisions."
+>
+  <div class="stack">
+    <section>
+      <p class="eyebrow">Audit trail</p>
+      <h1>Decisions</h1>
+      <p class="lede">
+        One row per request, newest first. Selecting a row shows every region it
+        carried, what the classifier scored, which rule fired and why — the same
+        record the evaluation harness replays from.
+      </p>
+    </section>
+
+    <section class="browser">
+      <div class="panel list-panel">
+        <div class="panel-head">
+          <span id="count">decisions</span>
+          <div class="filters" role="group" aria-label="Filter by outcome">
+            <button type="button" class="filter is-on" data-filter="all">All</button>
+            <button type="button" class="filter" data-filter="allow">Allowed</button>
+            <button type="button" class="filter" data-filter="allow_redacted">Redacted</button>
+            <button type="button" class="filter" data-filter="block">Blocked</button>
+          </div>
+        </div>
+        <div id="list" class="list"><div class="empty">Loading…</div></div>
+      </div>
+
+      <div class="panel detail-panel">
+        <div class="panel-head"><span>Detail</span></div>
+        <div id="detail">
+          <div class="empty">Select a decision to inspect it.</div>
+        </div>
+      </div>
+    </section>
+  </div>
+</Base>
+
+<script>
+  import { getDecisions, poll, ApiError } from '../lib/api';
+  import { el, clear, chip, sourceChip, channelChip, need, errorNotice, field } from '../lib/dom';
+  import {
+    relativeTime,
+    absoluteTime,
+    score as fmtScore,
+    shortHash,
+    truncate,
+    revealInvisibles,
+    hasInvisibles,
+  } from '../lib/format';
+  import {
+    outcomeAction,
+    outcomeLabel,
+    extractionLabel,
+    type DecisionRecord,
+    type RegionRecord,
+  } from '../lib/types';
+
+  const listHost = need('list');
+  const detailHost = need('detail');
+  const countHost = need('count');
+
+  let all: DecisionRecord[] = [];
+  let filter = 'all';
+  let selectedId: string | null = null;
+  let failed = false;
+
+  function visible(): DecisionRecord[] {
+    if (filter === 'all') return all;
+    return all.filter((d) => d.outcome.outcome === filter);
+  }
+
+  function renderList(): void {
+    const items = visible();
+    countHost.textContent = `${items.length} of ${all.length} decisions`;
+    clear(listHost);
+
+    if (items.length === 0) {
+      listHost.append(
+        el('div', { class: 'empty' }, all.length === 0 ? 'No decisions recorded yet.' : 'No decisions match this filter.'),
+      );
+      return;
+    }
+
+    const ul = el('ul', { class: 'rows' });
+    for (const d of items) {
+      const action = outcomeAction(d.outcome);
+      const lead = d.regions.find((r) => r.action === action) ?? d.regions[0];
+      const row = el(
+        'li',
+        {},
+        el(
+          'button',
+          {
+            type: 'button',
+            class: `row${d.decision_id === selectedId ? ' is-selected' : ''}`,
+            'data-id': d.decision_id,
+            'aria-current': d.decision_id === selectedId ? 'true' : undefined,
+          },
+          el(
+            'span',
+            { class: 'row-top' },
+            chip(action, outcomeLabel(d.outcome)),
+            sourceChip(d.source),
+            el('span', { class: 'row-time dim' }, relativeTime(d.ts_ms)),
+          ),
+          el('span', { class: 'row-text' }, truncate(lead?.raw ?? '(no regions)', 90)),
+          el(
+            'span',
+            { class: 'row-meta dim mono' },
+            `${d.rule_id} · ${d.regions.length} region${d.regions.length === 1 ? '' : 's'} · ${d.timings_ms.total} ms`,
+          ),
+        ),
+      );
+      ul.append(row);
+    }
+    listHost.append(ul);
+  }
+
+  function regionCard(r: RegionRecord): HTMLElement {
+    const changed = r.raw !== r.normalized;
+    const hidden = hasInvisibles(r.raw);
+
+    const body = el(
+      'dl',
+      { class: 'kv' },
+      field('channel', channelChip(r.channel)),
+      field('raw', el('span', { class: hidden ? 'reveal' : undefined, title: hidden ? 'Contains zero-width or bidi characters, shown as ␣ ⇄ ·' : undefined }, revealInvisibles(r.raw) || '(empty)')),
+    );
+
+    if (changed) {
+      body.append(
+        field(
+          'normalised',
+          el('span', { class: 'norm' }, r.normalized || '(empty)'),
+          hidden ? el('span', { class: 'norm-note' }, ' invisible characters stripped') : null,
+        ),
+      );
+    }
+
+    body.append(
+      field('score', fmtScore(r.score)),
+      field('ocr conf.', fmtScore(r.ocr_confidence)),
+      field(
+        'bbox',
+        r.bbox ? `${r.bbox.x}, ${r.bbox.y} · ${r.bbox.w}×${r.bbox.h}` : el('span', { class: 'dim' }, 'none — not redactable'),
+      ),
+      field('rule', el('span', { class: 'mono' }, r.rule_id)),
+      field('reason', r.reason),
+    );
+
+    return el(
+      'div',
+      { class: `region region--${r.action}` },
+      el(
+        'div',
+        { class: 'region-head' },
+        el('span', { class: 'mono region-id' }, `r${r.region_id}`),
+        chip(r.action),
+      ),
+      body,
+    );
+  }
+
+  function renderDetail(d: DecisionRecord | null): void {
+    clear(detailHost);
+    if (!d) {
+      detailHost.append(el('div', { class: 'empty' }, 'Select a decision to inspect it.'));
+      return;
+    }
+
+    const t = d.timings_ms;
+    const head = el(
+      'div',
+      { class: 'detail-head' },
+      el('div', { class: 'detail-title' }, chip(outcomeAction(d.outcome), outcomeLabel(d.outcome)), sourceChip(d.source)),
+      el('div', { class: 'detail-reason' }, d.reason),
+      el(
+        'dl',
+        { class: 'kv kv--tight' },
+        field('decided', `${absoluteTime(d.ts_ms)} (${relativeTime(d.ts_ms)})`),
+        field('decision', el('span', { class: 'mono' }, d.decision_id)),
+        field('input hash', el('span', { class: 'mono', title: d.input_hash }, shortHash(d.input_hash))),
+        field('extraction', `${d.extraction.engine} · ${extractionLabel(d.extraction.outcome)} · ${d.extraction.ms} ms`),
+        field(
+          'versions',
+          el(
+            'span',
+            { class: 'mono versions' },
+            `classifier ${d.versions.classifier}`,
+            el('br'),
+            `ruleset ${d.versions.ruleset}`,
+            el('br'),
+            `pipeline ${d.versions.pipeline}`,
+          ),
+        ),
+        field(
+          'timings',
+          el(
+            'span',
+            { class: 'mono' },
+            `decode ${t.decode} · ocr ${t.ocr} · classify ${t.classify} · policy ${t.policy} · redact ${t.redact} → ${t.total} ms`,
+          ),
+        ),
+      ),
+    );
+
+    if (d.source === 'seed') {
+      head.append(
+        el(
+          'div',
+          { class: 'notice notice--warn', style: 'margin-top:.8rem' },
+          'Seeded fixture. The verdict is real engine output; the timings are budget figures from design.md §9, not measurements.',
+        ),
+      );
+    } else {
+      head.append(
+        el(
+          'div',
+          { class: 'notice notice--info', style: 'margin-top:.8rem' },
+          'Live decision. Only the policy stage is measured — OCR, classifier and redaction are zero because those stages are not built yet.',
+        ),
+      );
+    }
+
+    const regions = el('div', { class: 'regions' });
+    if (d.regions.length === 0) {
+      regions.append(el('div', { class: 'empty' }, 'No regions.'));
+    } else {
+      for (const r of d.regions) regions.append(regionCard(r));
+    }
+
+    detailHost.append(head, el('h3', { class: 'regions-head' }, `Regions (${d.regions.length})`), regions);
+  }
+
+  function select(id: string): void {
+    selectedId = id;
+    if (location.hash.slice(1) !== id) {
+      history.replaceState(null, '', `#${id}`);
+    }
+    renderList();
+    renderDetail(all.find((d) => d.decision_id === id) ?? null);
+    detailHost.closest('.detail-panel')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  listHost.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-id]');
+    if (button?.dataset.id) select(button.dataset.id);
+  });
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>('.filter')) {
+    button.addEventListener('click', () => {
+      filter = button.dataset.filter ?? 'all';
+      for (const other of document.querySelectorAll('.filter')) other.classList.remove('is-on');
+      button.classList.add('is-on');
+      renderList();
+    });
+  }
+
+  poll(
+    async () => {
+      all = await getDecisions({ limit: 200 });
+      failed = false;
+
+      // Honour a #decision-id arriving from the overview page.
+      const fromHash = location.hash.slice(1);
+      if (!selectedId && fromHash && all.some((d) => d.decision_id === fromHash)) {
+        selectedId = fromHash;
+      }
+
+      renderList();
+      if (selectedId) {
+        renderDetail(all.find((d) => d.decision_id === selectedId) ?? null);
+      }
+    },
+    5000,
+    (e) => {
+      if (failed) return;
+      failed = true;
+      const err = e instanceof ApiError ? e : new ApiError('network', String(e));
+      clear(listHost);
+      listHost.append(errorNotice(err.userMessage, err.detail || undefined));
+    },
+  );
+</script>
+
+<style>
+  .browser {
+    display: grid;
+    grid-template-columns: minmax(20rem, 26rem) 1fr;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .list-panel,
+  .detail-panel {
+    overflow: hidden;
+  }
+
+  .filters {
+    display: flex;
+    gap: 0.2rem;
+  }
+
+  .filter {
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.16rem 0.42rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .filter:hover {
+    color: var(--ink);
+    background: var(--surface-3);
+  }
+
+  .filter.is-on {
+    color: var(--accent);
+    background: var(--accent-wash);
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  .list {
+    max-height: 40rem;
+    overflow-y: auto;
+  }
+
+  .rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .rows li + li {
+    border-top: 1px solid var(--rule-soft);
+  }
+
+  .row {
+    display: grid;
+    gap: 0.25rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.65rem 0.9rem;
+    background: transparent;
+    border: 0;
+    border-left: 2px solid transparent;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .row:hover {
+    background: var(--surface-2);
+  }
+
+  .row.is-selected {
+    background: var(--accent-wash);
+    border-left-color: var(--accent);
+  }
+
+  .row-top {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .row-time {
+    margin-left: auto;
+    font-size: 0.72rem;
+    white-space: nowrap;
+  }
+
+  .row-text {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    color: var(--ink-soft);
+    overflow-wrap: anywhere;
+  }
+
+  .row-meta {
+    font-size: 0.68rem;
+  }
+
+  /* detail */
+  .detail-head {
+    padding: 0.9rem;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+
+  .detail-title {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    margin-bottom: 0.4rem;
+  }
+
+  .detail-reason {
+    font-size: 0.9rem;
+    color: var(--ink);
+    margin-bottom: 0.8rem;
+    overflow-wrap: anywhere;
+  }
+
+  .kv {
+    display: grid;
+    grid-template-columns: 6.5rem 1fr;
+    gap: 0.4rem 0.75rem;
+    margin: 0;
+    font-size: 0.82rem;
+  }
+
+  .kv--tight {
+    gap: 0.28rem 0.75rem;
+  }
+
+  .kv :global(dt) {
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    padding-top: 0.18rem;
+  }
+
+  .kv :global(dd) {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .versions {
+    font-size: 0.72rem;
+    line-height: 1.7;
+    color: var(--ink-soft);
+  }
+
+  .regions-head {
+    padding: 0.8rem 0.9rem 0;
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .regions {
+    display: grid;
+    gap: 0.6rem;
+    padding: 0.6rem 0.9rem 0.9rem;
+  }
+
+  .region {
+    border: 1px solid var(--rule);
+    border-left-width: 2px;
+    border-radius: var(--radius-sm);
+    padding: 0.65rem 0.75rem;
+    background: var(--surface);
+  }
+
+  .region--allow {
+    border-left-color: var(--allow);
+  }
+  .region--flag {
+    border-left-color: var(--flag);
+  }
+  .region--redact {
+    border-left-color: var(--redact);
+  }
+  .region--block {
+    border-left-color: var(--block);
+  }
+
+  .region-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .region-id {
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+
+  .region :global(.reveal) {
+    background: var(--flag-bg);
+    color: var(--flag);
+    border-radius: 2px;
+    padding: 0 0.15rem;
+  }
+
+  .region :global(.norm) {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+  }
+
+  .region :global(.norm-note) {
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+
+  @media (max-width: 62rem) {
+    .browser {
+      grid-template-columns: 1fr;
+    }
+    .list {
+      max-height: 24rem;
+    }
+  }
+
+  @media (max-width: 34rem) {
+    .kv {
+      grid-template-columns: 1fr;
+      gap: 0.1rem;
+    }
+    .panel-head {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+</style>

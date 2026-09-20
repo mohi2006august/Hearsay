@@ -1,0 +1,21 @@
+{
+  "name": "hearsay-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Decision dashboard for the Hearsay provenance proxy.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro check && astro build",
+    "build:fast": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "astro": "^5.14.1"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "typescript": "^5.9.2"
+  }
+}
